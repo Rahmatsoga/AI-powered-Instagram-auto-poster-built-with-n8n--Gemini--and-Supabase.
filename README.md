@@ -1,4 +1,4 @@
-# DevSynt AutoGram Engine (n8n)
+# AutoGram Engine (n8n)
 
 An automated n8n workflow that turns a folder of images in Google Drive into scheduled, AI-captioned Instagram posts — with no manual work after setup.
 
