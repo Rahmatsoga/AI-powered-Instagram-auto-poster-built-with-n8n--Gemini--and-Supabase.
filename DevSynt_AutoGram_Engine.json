@@ -1,0 +1,309 @@
+{
+  "name": "DevSynt AutoGram Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "minutes", "minutesInterval": 30 } ] }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger (Every 30 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ -400, 300 ]
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "queryString": "='YOUR_DRIVE_FOLDER_ID' in parents and (mimeType contains 'image/') and trashed = false",
+        "options": { "fields": [ "id", "name", "mimeType", "createdTime" ] }
+      },
+      "id": "drive-list",
+      "name": "List New Images (Drive)",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [ -160, 300 ],
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "GOOGLE_DRIVE_CREDENTIAL_ID", "name": "Google Drive account" }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "Loop Over Images",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [ 80, 300 ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://YOUR_PROJECT.supabase.co/rest/v1/posted_images?drive_file_id=eq.{{ $json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_KEY" }
+          ]
+        },
+        "options": {},
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 3000
+      },
+      "id": "check-duplicate-http",
+      "name": "Check If Already Posted (Supabase)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 340, 180 ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nconst isDuplicate = Array.isArray(result) ? result.length > 0 : false;\nconst originalFile = $('Loop Over Images').item.json;\n\nreturn [{\n  json: {\n    ...originalFile,\n    isDuplicate\n  }\n}];"
+      },
+      "id": "check-duplicate-code",
+      "name": "Evaluate Duplicate Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 580, 180 ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-not-dup",
+              "leftValue": "={{ $json.isDuplicate }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-not-duplicate",
+      "name": "IF Not Already Posted",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [ 820, 180 ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": "={{ $json.id }}",
+        "options": {}
+      },
+      "id": "drive-download",
+      "name": "Download Image (Drive)",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [ 1060, 60 ],
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "GOOGLE_DRIVE_CREDENTIAL_ID", "name": "Google Drive account" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://YOUR_PROJECT.supabase.co/storage/v1/object/YOUR_BUCKET_NAME/{{ $('Loop Over Images').item.json.id }}-{{ $('Loop Over Images').item.json.name }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_KEY" },
+            { "name": "Content-Type", "value": "={{ $binary.data.mimeType }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "raw",
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {},
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 4000
+      },
+      "id": "supabase-upload",
+      "name": "Upload Image to Supabase Storage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 1300, 60 ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "fields": {
+          "values": [
+            {
+              "name": "publicUrl",
+              "stringValue": "=https://YOUR_PROJECT.supabase.co/storage/v1/object/public/YOUR_BUCKET_NAME/{{ $('Loop Over Images').item.json.id }}-{{ $('Loop Over Images').item.json.name }}"
+            },
+            { "name": "fileName", "stringValue": "={{ $('Loop Over Images').item.json.name }}" },
+            { "name": "fileId", "stringValue": "={{ $('Loop Over Images').item.json.id }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "build-public-url",
+      "name": "Build Public Image URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [ 1540, 60 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=YOUR_GEMINI_API_KEY",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [ { parts: [ { text: \"You are a social media assistant. Write a short, engaging Instagram caption (1-2 sentences) and 5-8 relevant hashtags for a photo with this filename/context: '\" + $json.fileName + \"'.\\n\\nReturn ONLY valid JSON in this exact format:\\n{\\\"caption\\\": \\\"...\\\", \\\"hashtags\\\": \\\"#tag1 #tag2 #tag3\\\"}\" } ] } ] }) }}",
+        "options": {},
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 4000
+      },
+      "id": "gemini-caption",
+      "name": "Generate Caption with Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 1780, 60 ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\nconst raw = item.candidates?.[0]?.content?.parts?.[0]?.text || '';\nconst cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();\n\nlet caption = 'Check out our latest post!';\nlet hashtags = '#newpost';\n\ntry {\n  const parsed = JSON.parse(cleaned);\n  caption = parsed.caption || caption;\n  hashtags = parsed.hashtags || hashtags;\n} catch (e) {\n  // fall back to defaults above if parsing fails, so posting never breaks\n}\n\nreturn [{\n  json: {\n    ...$('Build Public Image URL').item.json,\n    caption,\n    hashtags,\n    fullCaption: caption + '\\n\\n' + hashtags\n  }\n}];"
+      },
+      "id": "parse-caption",
+      "name": "Parse Caption Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 2020, 60 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v19.0/YOUR_IG_USER_ID/media",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ image_url: $json.publicUrl, caption: $json.fullCaption, access_token: \"YOUR_IG_ACCESS_TOKEN\" }) }}",
+        "options": {},
+        "retryOnFail": true,
+        "maxTries": 2,
+        "waitBetweenTries": 5000
+      },
+      "id": "ig-create-container",
+      "name": "Create IG Media Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 2260, 60 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v19.0/YOUR_IG_USER_ID/media_publish",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ creation_id: $json.id, access_token: \"YOUR_IG_ACCESS_TOKEN\" }) }}",
+        "options": {},
+        "retryOnFail": true,
+        "maxTries": 2,
+        "waitBetweenTries": 5000
+      },
+      "id": "ig-publish",
+      "name": "Publish to Instagram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 2500, 60 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://YOUR_PROJECT.supabase.co/rest/v1/posted_images",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_KEY" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ drive_file_id: $('Build Public Image URL').item.json.fileId, file_name: $('Build Public Image URL').item.json.fileName, caption: $('Parse Caption Response').item.json.caption, hashtags: $('Parse Caption Response').item.json.hashtags, public_url: $('Build Public Image URL').item.json.publicUrl, instagram_post_id: $json.id, posted_at: $now.toISO() }) }}",
+        "options": {},
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 3000
+      },
+      "id": "supabase-log",
+      "name": "Log Post to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 2740, 60 ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (Every 30 min)": {
+      "main": [ [ { "node": "List New Images (Drive)", "type": "main", "index": 0 } ] ]
+    },
+    "List New Images (Drive)": {
+      "main": [ [ { "node": "Loop Over Images", "type": "main", "index": 0 } ] ]
+    },
+    "Loop Over Images": {
+      "main": [
+        [],
+        [ { "node": "Check If Already Posted (Supabase)", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Check If Already Posted (Supabase)": {
+      "main": [ [ { "node": "Evaluate Duplicate Result", "type": "main", "index": 0 } ] ]
+    },
+    "Evaluate Duplicate Result": {
+      "main": [ [ { "node": "IF Not Already Posted", "type": "main", "index": 0 } ] ]
+    },
+    "IF Not Already Posted": {
+      "main": [
+        [ { "node": "Download Image (Drive)", "type": "main", "index": 0 } ],
+        [ { "node": "Loop Over Images", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Download Image (Drive)": {
+      "main": [ [ { "node": "Upload Image to Supabase Storage", "type": "main", "index": 0 } ] ]
+    },
+    "Upload Image to Supabase Storage": {
+      "main": [ [ { "node": "Build Public Image URL", "type": "main", "index": 0 } ] ]
+    },
+    "Build Public Image URL": {
+      "main": [ [ { "node": "Generate Caption with Gemini", "type": "main", "index": 0 } ] ]
+    },
+    "Generate Caption with Gemini": {
+      "main": [ [ { "node": "Parse Caption Response", "type": "main", "index": 0 } ] ]
+    },
+    "Parse Caption Response": {
+      "main": [ [ { "node": "Create IG Media Container", "type": "main", "index": 0 } ] ]
+    },
+    "Create IG Media Container": {
+      "main": [ [ { "node": "Publish to Instagram", "type": "main", "index": 0 } ] ]
+    },
+    "Publish to Instagram": {
+      "main": [ [ { "node": "Log Post to Supabase", "type": "main", "index": 0 } ] ]
+    },
+    "Log Post to Supabase": {
+      "main": [ [ { "node": "Loop Over Images", "type": "main", "index": 0 } ] ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "versionId": "1"
+}
